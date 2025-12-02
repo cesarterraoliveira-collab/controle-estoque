@@ -1,11 +1,11 @@
 // src/paginas/Movimentacoes.js
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState } from "react";
 import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
 import { db } from "../configuracoes/firebaseConfig";
 import FormMovimentacao from "../componentes/FormMovimentacao";
 import { useAuth } from "../configuracoes/AuthContext";
 
-// Estilos padrão
+// Estilos repetitivos
 const thStyle = { padding: "10px", borderBottom: "2px solid #ddd", textAlign: "left" };
 const tdStyle = { padding: "10px", borderBottom: "1px solid #eee" };
 
@@ -31,14 +31,13 @@ export default function Movimentacoes() {
     }
   };
 
-  // 🔥 Agora com useCallback → elimina warnings do ESLint
-  const carregarMovimentacoes = useCallback(async () => {
+  const carregarMovimentacoes = async () => {
     if (!licenca || !cnpj) return;
 
     try {
       setCarregando(true);
 
-      // Buscar clientes
+      // ✔️ CORRIGIDO: buscar clientes reais
       const qC = query(collection(db, "clientes"), where("licencaCnpj", "==", cnpj));
       const snapC = await getDocs(qC);
 
@@ -49,7 +48,7 @@ export default function Movimentacoes() {
 
       setClientes(mapaClientes);
 
-      // Buscar movimentações
+      // buscar movimentações
       const q = query(
         collection(db, "movimentacoes"),
         where("licenca", "==", licenca),
@@ -61,7 +60,7 @@ export default function Movimentacoes() {
       const lista = snap.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
-        data: doc.data()?.data?.toDate() || null
+        data: doc.data().data?.toDate() || null
       }));
 
       setMovimentacoes(lista);
@@ -71,14 +70,12 @@ export default function Movimentacoes() {
     } finally {
       setCarregando(false);
     }
-  }, [licenca, cnpj]);
+  };
 
-  // Agora sem warnings
   useEffect(() => {
-    carregarMovimentacoes();
-  }, [carregarMovimentacoes]);
+    if (licenca) carregarMovimentacoes();
+  }, [licenca]);
 
-  // Bloqueio caso a licença não esteja ativa
   if (!licencaAtiva) {
     return (
       <div style={{ textAlign: "center", padding: 50 }}>
@@ -125,7 +122,6 @@ export default function Movimentacoes() {
                   <th style={thStyle}>Usuário</th>
                 </tr>
               </thead>
-
               <tbody>
                 {movimentacoes.map((m) => (
                   <tr key={m.id}>
@@ -160,17 +156,26 @@ export default function Movimentacoes() {
                         fontWeight: "bold",
                         textAlign: "center",
                         color:
-                          ["compra", "entrada", "devolucao"].includes(m.tipo)
+                          m.tipo === "compra" ||
+                          m.tipo === "entrada" ||
+                          m.tipo === "devolucao"
                             ? "#28a745"
                             : "#dc3545"
                       }}
                     >
-                      {["compra", "entrada", "devolucao"].includes(m.tipo) ? "+" : "-"}
+                      {m.tipo === "compra" ||
+                      m.tipo === "entrada" ||
+                      m.tipo === "devolucao"
+                        ? "+"
+                        : "-"}
                       {m.quantidade}
                     </td>
 
+                    {/* ✔️ AQUI ESTÁ A CORREÇÃO! */}
                     <td style={tdStyle}>
-                      {m.clienteNome || clientes[m.clienteId] || "—"}
+                      {m.clienteNome ||
+                        clientes[m.clienteId] ||
+                        "—"}
                     </td>
 
                     <td style={tdStyle}>{m.observacao || "—"}</td>
