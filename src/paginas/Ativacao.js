@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { db } from "../configuracoes/firebaseConfig";
-import { collection, query, where, getDocs } from "firebase/firestore"; // <--- Mudança importante aqui
+import { collection, query, where, getDocs } from "firebase/firestore";
 
 export default function Ativacao({ onAtivacao }) {
   const [licenca, setLicenca] = useState("");
@@ -29,8 +29,7 @@ export default function Ativacao({ onAtivacao }) {
 
   const handleAtivar = async () => {
     setErro("");
-    
-    // 1. Limpeza básica dos inputs
+
     const chaveLimpa = licenca.trim();
     const cpfLimpo = cpfCnpj.trim();
 
@@ -44,8 +43,6 @@ export default function Ativacao({ onAtivacao }) {
     try {
       console.log("🔍 Buscando licença:", chaveLimpa, cpfLimpo);
 
-      // 2. A CORREÇÃO MÁGICA: Usar Query em vez de getDoc
-      // Busca onde o campo "chave" é igual ao digitado E "cpfCnpj" é igual ao digitado
       const q = query(
         collection(db, "licencas"),
         where("chave", "==", chaveLimpa),
@@ -54,77 +51,92 @@ export default function Ativacao({ onAtivacao }) {
 
       const querySnapshot = await getDocs(q);
 
-      // 3. Verifica se achou algum registro
       if (querySnapshot.empty) {
         throw new Error("Licença não encontrada ou dados incorretos.");
       }
 
-      // Pega o primeiro resultado encontrado
       const docEncontrado = querySnapshot.docs[0];
       const dadosLicenca = docEncontrado.data();
-      
-      console.log("✅ Licença encontrada:", dadosLicenca);
 
-      // 4. Validações de Segurança
+      console.log("Licença encontrada:", dadosLicenca);
+
+      // 🚫 1 — BLOQUEIO DO PROBLEMA:
       if (!dadosLicenca.ativa) {
-        throw new Error("Esta licença foi desativada pelo administrador.");
+        throw new Error("Esta licença está desativada pelo administrador.");
       }
 
-      // Verifica validade (converte Timestamp do Firebase para Date JS)
+      // ⏳ 2 — bloqueio por expiração
       if (dadosLicenca.dataExpiracao) {
-        const dataExp = dadosLicenca.dataExpiracao.toDate ? dadosLicenca.dataExpiracao.toDate() : new Date(dadosLicenca.dataExpiracao);
+        const dataExp = dadosLicenca.dataExpiracao.toDate
+          ? dadosLicenca.dataExpiracao.toDate()
+          : new Date(dadosLicenca.dataExpiracao);
+
         if (dataExp < new Date()) {
-           throw new Error("Esta licença expirou.");
+          throw new Error("Esta licença expirou.");
         }
       }
 
-      // 5. Sucesso! Salva no navegador
-      localStorage.setItem('licenca', chaveLimpa);
-      localStorage.setItem('cnpj', cpfLimpo);
-      localStorage.setItem('licencaInfo', JSON.stringify(dadosLicenca));
+      // 3 — Sucesso
+      localStorage.setItem("licenca", chaveLimpa);
+      localStorage.setItem("cnpj", cpfLimpo);
+      localStorage.setItem("licencaInfo", JSON.stringify(dadosLicenca));
 
       alert(`Bem-vindo(a), ${dadosLicenca.nomeCliente}! Sistema ativado.`);
 
-      if (onAtivacao) {
-        onAtivacao(); // Atualiza o App.js
-      }
+      if (onAtivacao) onAtivacao();
 
     } catch (error) {
-      console.error("❌ Erro na ativação:", error);
+      console.error("Erro na ativação:", error);
       setErro(error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Estilos auxiliares
   const inputStyle = {
-    width: "100%", padding: "12px", marginTop: "5px", marginBottom: "15px",
-    borderRadius: "8px", border: "1px solid #ccc", fontSize: "15px", boxSizing: "border-box"
+    width: "100%",
+    padding: "12px",
+    marginTop: "5px",
+    marginBottom: "15px",
+    borderRadius: "8px",
+    border: "1px solid #ccc",
+    fontSize: "15px",
+    boxSizing: "border-box",
   };
 
   return (
     <div style={containerStyle}>
       <div style={cardStyle}>
-        <h2 style={{textAlign: "center", color: "#333", marginBottom: "20px"}}>🔐 Ativação do Sistema</h2>
+        <h2 style={{ textAlign: "center", color: "#333", marginBottom: "20px" }}>
+          🔐 Ativação do Sistema
+        </h2>
 
         {erro && (
-          <div style={{color: "#721c24", backgroundColor: "#f8d7da", padding: "10px", borderRadius: "5px", marginBottom: "15px", textAlign: "center"}}>
+          <div
+            style={{
+              color: "#721c24",
+              backgroundColor: "#f8d7da",
+              padding: "10px",
+              borderRadius: "5px",
+              marginBottom: "15px",
+              textAlign: "center",
+            }}
+          >
             {erro}
           </div>
         )}
 
-        <label style={{fontWeight: "600"}}>Chave de Licença:</label>
+        <label style={{ fontWeight: "600" }}>Chave de Licença:</label>
         <input
           type="text"
-          placeholder="Ex: LIC-CLIENTE2"
+          placeholder="Ex: LIC-XXXXX-XXXXX-XXXXX"
           value={licenca}
-          onChange={(e) => setLicenca(e.target.value)} // Removi o toUpperCase forçado para evitar erros se vc cadastrou minúsculo
+          onChange={(e) => setLicenca(e.target.value)}
           style={inputStyle}
           disabled={loading}
         />
 
-        <label style={{fontWeight: "600"}}>CPF ou CNPJ:</label>
+        <label style={{ fontWeight: "600" }}>CPF ou CNPJ:</label>
         <input
           type="text"
           placeholder="Digite exatamente como no cadastro"
@@ -138,14 +150,28 @@ export default function Ativacao({ onAtivacao }) {
           onClick={handleAtivar}
           disabled={loading}
           style={{
-            width: "100%", padding: "12px", backgroundColor: loading ? "#6c757d" : "#007bff",
-            border: "none", borderRadius: "8px", color: "white", fontSize: "16px", fontWeight: "bold", cursor: loading ? "not-allowed" : "pointer"
+            width: "100%",
+            padding: "12px",
+            backgroundColor: loading ? "#6c757d" : "#007bff",
+            border: "none",
+            borderRadius: "8px",
+            color: "white",
+            fontSize: "16px",
+            fontWeight: "bold",
+            cursor: loading ? "not-allowed" : "pointer",
           }}
         >
           {loading ? "Verificando..." : "🚀 Ativar Sistema"}
         </button>
-        
-        <p style={{textAlign: "center", marginTop: "20px", fontSize: "13px", color: "#666"}}>
+
+        <p
+          style={{
+            textAlign: "center",
+            marginTop: "20px",
+            fontSize: "13px",
+            color: "#666",
+          }}
+        >
           Entre em contato com o suporte se tiver problemas.
         </p>
       </div>

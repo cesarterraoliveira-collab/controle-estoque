@@ -424,12 +424,9 @@ export default function AdminLicencas() {
                 </p>
                 <p>
                   <strong>Data:</strong>{" "}
-                  {/* CORREÇÃO IMPLEMENTADA AQUI: Tratamento para Timestamp e objeto Date nativo */}
-                  {log.data && typeof log.data.toDate === 'function'
+                  {log.data?.toDate
                     ? log.data.toDate().toLocaleString("pt-BR")
-                    : log.data 
-                      ? new Date(log.data).toLocaleString("pt-BR")
-                      : "Inválida"}
+                    : "Inválida"}
                 </p>
               </div>
             ))}
