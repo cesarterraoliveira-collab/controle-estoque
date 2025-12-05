@@ -128,7 +128,8 @@ export default function FormMovimentacao({ onMovimentacaoSucesso }) {
         if (!prodSnap.exists()) throw new Error("Produto não encontrado.");
 
         const prodData = prodSnap.data();
-        const estoqueAtual = Number(prodData.estoqueAtual || 0);
+        // 🔹 Ajuste para garantir estoque inicial
+        const estoqueAtual = Number(prodData.estoqueAtual ?? prodData.quantidadeInicial ?? 0);
 
         const tipoObj = tiposMap.find(t => t.value === tipo) || { sinal: 0 };
         let novoEstoque =
@@ -140,7 +141,7 @@ export default function FormMovimentacao({ onMovimentacaoSucesso }) {
 
         transaction.update(produtoRef, { estoqueAtual: novoEstoque });
 
-        // 🔵 NOVO: Adiciona clienteNome à movimentação
+        // 🔵 Cliente nome
         const clienteNome =
           clienteId ? clientes.find(c => c.id === clienteId)?.nome || null : null;
 
@@ -151,7 +152,7 @@ export default function FormMovimentacao({ onMovimentacaoSucesso }) {
           tipo: tipoObj.value,
           quantidade: qtd,
           clienteId: clienteId || null,
-          clienteNome, // <-- AQUI O AJUSTE
+          clienteNome,
           observacao: observacao || null,
           usuario: "manual",
           data: serverTimestamp(),
@@ -219,7 +220,7 @@ export default function FormMovimentacao({ onMovimentacaoSucesso }) {
                 >
                   <div style={{ fontWeight: 700 }}>{p.nome}</div>
                   <div style={{ fontSize: 12, color: "#666" }}>
-                    Estoque: {p.estoqueAtual ?? 0} • Cod: {p.codigoBarras || "—"} • {p.cor || ""} {p.tamanho || ""}
+                    Estoque: {p.estoqueAtual ?? p.quantidadeInicial ?? 0} • Cod: {p.codigoBarras || "—"} • {p.cor || ""} {p.tamanho || ""}
                   </div>
                 </div>
               ))

@@ -1,6 +1,6 @@
-// --- CLIENTES.JS MODERNO (ESTILO STARTUP – ARREDONDADO SUAVE) --- 
+// --- CLIENTES.JS MODERNO (ESTILO STARTUP – ARREDONDADO SUAVE) ---
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { db } from "../configuracoes/firebaseConfig";
 import {
   collection,
@@ -13,10 +13,11 @@ import {
   doc,
   updateDoc,
   deleteDoc,
-  setDoc,
+  runTransaction,
 } from "firebase/firestore";
 import { useAuth } from "../configuracoes/AuthContext";
 
+// ===== ESTILOS =====
 const containerStyle = {
   padding: "20px",
   backgroundColor: "#f5f7fb",
@@ -33,7 +34,13 @@ const inputStyle = {
   transition: "0.2s",
 };
 
-// Modal moderno
+// ESTADOS DO BRASIL
+const estadosBrasil = [
+  "AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB",
+  "PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"
+];
+
+// ===== MODAL =====
 function Modal({ children, onClose }) {
   return (
     <div
@@ -81,20 +88,18 @@ function Modal({ children, onClose }) {
   );
 }
 
-// Helpers de máscara
+// ===== FUNÇÕES AUXILIARES =====
 const apenasNumeros = (s = "") => (s || "").replace(/\D/g, "");
 
 function formatCpfCnpj(raw = "") {
   const v = apenasNumeros(raw);
   if (v.length <= 11) {
-    // CPF: 000.000.000-00
     return v
       .replace(/^(\d{3})(\d)/, "$1.$2")
       .replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3")
       .replace(/(\d{3})(\d{1,2})$/, "$1-$2")
       .slice(0, 14);
   } else {
-    // CNPJ: 00.000.000/0000-00
     return v
       .replace(/^(\d{2})(\d)/, "$1.$2")
       .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
@@ -109,7 +114,7 @@ function formatCep(raw = "") {
   return v.length > 5 ? v.replace(/^(\d{5})(\d)/, "$1-$2") : v;
 }
 
-// Componente principal
+// ===== COMPONENTE PRINCIPAL =====
 export default function Clientes() {
   const { licencaAtiva, cnpj } = useAuth();
 
@@ -136,39 +141,38 @@ export default function Clientes() {
   const [editingClient, setEditingClient] = useState(null);
   const [editForm, setEditForm] = useState({});
 
-  // Gerar código automático
+  // ===== GERAR CÓDIGO AUTOMÁTICO =====
   const gerarCodigoCliente = async () => {
     if (!cnpj) return "000001";
     const cnpjLimpo = cnpj.replace(/\D/g, "");
     const ref = doc(db, "contadores", cnpjLimpo);
 
-    let existente = null;
     try {
-      const s2 = await getDocs(query(collection(db, "contadores")));
-      s2.docs.forEach((d) => {
-        if (d.id === cnpjLimpo) existente = d;
-      });
-    } catch (err) {
-      // ignore
-    }
+      const codigo = await runTransaction(db, async (transaction) => {
+        const docSnap = await transaction.get(ref);
+        let proximo;
 
-    if (!existente) {
-      try {
-        await setDoc(ref, { proximoCodigoCliente: 1 });
-      } catch (err) {
-        // ignore
-      }
+        if (!docSnap.exists()) {
+          transaction.set(ref, { proximoCodigoCliente: 2 });
+          proximo = 1;
+        } else {
+          const atual = docSnap.data().proximoCodigoCliente || 1;
+          proximo = atual;
+          transaction.update(ref, { proximoCodigoCliente: atual + 1 });
+        }
+
+        return String(proximo).padStart(6, "0");
+      });
+
+      return codigo;
+    } catch (err) {
+      console.error("Erro ao gerar código:", err);
       return "000001";
     }
-
-    const atual = existente.data()?.proximoCodigoCliente || 1;
-    const novo = atual + 1;
-    await updateDoc(ref, { proximoCodigoCliente: novo });
-    return String(atual).padStart(6, "0");
   };
 
-  // Buscar clientes
-  const buscarClientes = async () => {
+  // ===== BUSCAR CLIENTES (useCallback para evitar warning do eslint) =====
+  const buscarClientes = useCallback(async () => {
     if (!cnpj) return;
     try {
       const q = query(
@@ -182,24 +186,46 @@ export default function Clientes() {
     } catch (err) {
       console.error(err);
     }
-  };
+  }, [cnpj]);
 
   useEffect(() => {
     if (licencaAtiva && cnpj && abaAtiva === "lista") buscarClientes();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [licencaAtiva, cnpj, abaAtiva]);
+  }, [licencaAtiva, cnpj, abaAtiva, buscarClientes]);
 
-  // Handlers
+  // ===== CEP AUTOMÁTICO =====
+  const handleCepChange = async (e) => {
+    const cepFormatado = formatCep(e.target.value);
+    setFormData({ ...formData, cep: cepFormatado });
+
+    const cepLimpo = apenasNumeros(cepFormatado);
+    if (cepLimpo.length !== 8) return;
+
+    try {
+      const resp = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`);
+      const data = await resp.json();
+
+      if (!data.erro) {
+        setFormData((prev) => ({
+          ...prev,
+          rua: data.logradouro || prev.rua,
+          bairro: data.bairro || prev.bairro,
+          cidade: data.localidade || prev.cidade,
+          estado: data.uf || prev.estado,
+        }));
+      }
+    } catch (error) {
+      console.error("Erro no ViaCEP:", error);
+    }
+  };
+
+  // ===== HANDLERS =====
   const handleChange = (e) =>
     setFormData({ ...formData, [e.target.name]: e.target.value });
 
   const handleCpfCnpjChange = (e) =>
     setFormData({ ...formData, cpfCnpj: formatCpfCnpj(e.target.value) });
 
-  const handleCepChange = (e) =>
-    setFormData({ ...formData, cep: formatCep(e.target.value) });
-
-  // Submit cadastro
+  // ===== SUBMIT CADASTRO =====
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!formData.nome) return alert("Nome é obrigatório.");
@@ -236,7 +262,7 @@ export default function Clientes() {
     setLoading(false);
   };
 
-  // Excluir cliente
+  // ===== EXCLUIR CLIENTE =====
   const excluirCliente = async (id, nome) => {
     if (!window.confirm(`Tem certeza que deseja excluir "${nome}"?`)) return;
     try {
@@ -248,32 +274,18 @@ export default function Clientes() {
     }
   };
 
-  // Abrir edição
+  // ===== ABRIR EDIÇÃO =====
   const abrirEditar = (cliente) => {
     setEditingClient(cliente);
-    setEditForm({
-      nome: cliente.nome || "",
-      cpfCnpj: cliente.cpfCnpj || "",
-      telefone: cliente.telefone || "",
-      email: cliente.email || "",
-      cep: cliente.cep || "",
-      rua: cliente.rua || "",
-      bairro: cliente.bairro || "",
-      cidade: cliente.cidade || "",
-      estado: cliente.estado || "",
-      observacao: cliente.observacao || "",
-      codigo: cliente.codigo || "",
-    });
+    setEditForm({ ...cliente });
     setShowEditModal(true);
   };
 
-  // Salvar edição
+  // ===== SALVAR EDIÇÃO =====
   const salvarEdicao = async () => {
     if (!editingClient) return;
     try {
-      await updateDoc(doc(db, "clientes", editingClient.id), {
-        ...editForm,
-      });
+      await updateDoc(doc(db, "clientes", editingClient.id), { ...editForm });
       alert("Cliente atualizado!");
       setShowEditModal(false);
       buscarClientes();
@@ -295,6 +307,7 @@ export default function Clientes() {
   if (!licencaAtiva)
     return <div style={{ padding: 20 }}>Carregando licença...</div>;
 
+  // ===== RENDER =====
   return (
     <div style={containerStyle}>
       <h2 style={{ textAlign: "center", marginBottom: 20, color: "#333" }}>
@@ -383,7 +396,6 @@ export default function Clientes() {
             style={inputStyle}
           />
 
-          {/* Endereço quebrado */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
             <input
               name="cep"
@@ -418,16 +430,22 @@ export default function Clientes() {
             />
           </div>
 
+          {/* SELECT DE ESTADO */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <input
+            <select
               name="estado"
-              placeholder="Estado (UF)"
               value={formData.estado}
-              onChange={(e) =>
-                setFormData({ ...formData, estado: e.target.value.toUpperCase().slice(0, 2) })
-              }
-              style={inputStyle}
-            />
+              onChange={(e) => setFormData({ ...formData, estado: e.target.value })}
+              style={{ ...inputStyle, paddingRight: 10 }}
+            >
+              <option value="">UF</option>
+              {estadosBrasil.map((uf) => (
+                <option key={uf} value={uf}>
+                  {uf}
+                </option>
+              ))}
+            </select>
+
             <input
               name="observacao"
               placeholder="Observação (opcional)"
@@ -514,9 +532,7 @@ export default function Clientes() {
                       {c.cep ? ` • CEP: ${c.cep}` : ""}
                     </div>
 
-                    {c.observacao ? (
-                      <div style={{ color: "#555", marginTop: 6 }}>Obs: {c.observacao}</div>
-                    ) : null}
+                    {c.observacao && <div style={{ color: "#555", marginTop: 6 }}>Obs: {c.observacao}</div>}
                   </div>
 
                   <div style={{ display: "flex", gap: 8 }}>
@@ -619,13 +635,21 @@ export default function Clientes() {
               />
             </div>
 
+            {/* SELECT UF NA EDIÇÃO */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <input
+              <select
                 value={editForm.estado || ""}
-                onChange={(e) => setEditForm({ ...editForm, estado: e.target.value.toUpperCase().slice(0, 2) })}
-                placeholder="Estado (UF)"
+                onChange={(e) => setEditForm({ ...editForm, estado: e.target.value })}
                 style={inputStyle}
-              />
+              >
+                <option value="">UF</option>
+                {estadosBrasil.map((uf) => (
+                  <option key={uf} value={uf}>
+                    {uf}
+                  </option>
+                ))}
+              </select>
+
               <input
                 value={editForm.observacao || ""}
                 onChange={(e) => setEditForm({ ...editForm, observacao: e.target.value })}
@@ -634,29 +658,15 @@ export default function Clientes() {
               />
             </div>
 
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button
-                onClick={() => setShowEditModal(false)}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: "#6c757d",
-                  color: "#fff",
-                  cursor: "pointer",
-                }}
-              >
-                Cancelar
-              </button>
-
+            <div style={{ textAlign: "right", marginTop: 10 }}>
               <button
                 onClick={salvarEdicao}
                 style={{
-                  padding: "10px 14px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: "#4da3ff",
+                  padding: "12px 20px",
+                  background: "#6a5acd",
                   color: "#fff",
+                  borderRadius: 10,
+                  border: "none",
                   cursor: "pointer",
                 }}
               >

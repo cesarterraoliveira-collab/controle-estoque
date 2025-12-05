@@ -1,6 +1,6 @@
-// --- PRODUTOS.JS COM BOTÃO DE EDITAR (CORRIGIDO) ---
+// --- PRODUTOS.JS COM CAMPOS NUMÉRICOS E TAMANHO ---
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { db } from "../configuracoes/firebaseConfig";
 import {
   collection,
@@ -13,11 +13,11 @@ import {
   doc,
   updateDoc,
   deleteDoc,
-  setDoc,
+  runTransaction,
 } from "firebase/firestore";
 import { useAuth } from "../configuracoes/AuthContext";
-import { exportToCSV } from "../utils/exportUtils";
 
+// ===== ESTILOS =====
 const containerStyle = {
   padding: "20px",
   backgroundColor: "#f5f7fb",
@@ -34,7 +34,7 @@ const inputStyle = {
   transition: "0.2s",
 };
 
-// Modal moderno (componente interno)
+// ===== MODAL =====
 function Modal({ children, onClose }) {
   return (
     <div
@@ -57,7 +57,7 @@ function Modal({ children, onClose }) {
           padding: 30,
           borderRadius: 16,
           width: "92%",
-          maxWidth: 600,
+          maxWidth: 700,
           boxShadow: "0 4px 18px rgba(0,0,0,0.12)",
         }}
       >
@@ -82,206 +82,172 @@ function Modal({ children, onClose }) {
   );
 }
 
+// ===== COMPONENTE PRINCIPAL =====
 export default function Produtos() {
   const { licencaAtiva, cnpj } = useAuth();
 
   const [formData, setFormData] = useState({
     nome: "",
-    cor: "",
-    tamanho: "",
-    precoCusto: "",
-    precoVenda: "",
-    estoqueAtual: "",
-    estoqueMinimo: "",
     codigo: "",
-    codigoBarras: "",
-    descricao: "",
+    tamanho: "",
+    quantidadeInicial: "",
+    estoqueMinimo: "",
+    precoCompra: "",
+    precoVenda: "",
+    observacao: "",
   });
 
   const [loading, setLoading] = useState(false);
-  const [abaAtiva, setAbaAtiva] = useState("cadastro");
   const [produtos, setProdutos] = useState([]);
-  const [carregandoProdutos, setCarregandoProdutos] = useState(false);
-  const [termoPesquisa, setTermoPesquisa] = useState("");
-  const [filtroEstoque, setFiltroEstoque] = useState("todos");
+  const [termoPesquisa, setTermePesquisa] = useState("");
+  const [abaAtiva, setAbaAtiva] = useState("cadastro");
 
-  // Modal edição
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [editForm, setEditForm] = useState({});
 
-  // --- Código automático ---
+  // ===== GERAR CÓDIGO AUTOMÁTICO =====
   const gerarCodigoProduto = async () => {
     if (!cnpj) return "000001";
-    const cnpjLimpo = cnpj.replace(/[^\d]/g, "");
-
-    const docRef = doc(db, "contadores", cnpjLimpo);
-    const snap = await getDocs(collection(db, "contadores"));
-
-    let docExiste = null;
-    snap.docs.forEach((d) => {
-      if (d.id === cnpjLimpo) docExiste = d;
-    });
-
-    if (!docExiste) {
-      await setDoc(docRef, { proximoCodigoProduto: 1 });
-      return "000001";
-    }
-
-    const atual = docExiste.data().proximoCodigoProduto || 1;
-    const novo = atual + 1;
-
-    await updateDoc(docRef, { proximoCodigoProduto: novo });
-
-    return String(atual).padStart(6, "0");
-  };
-
-  // Carregar produtos
-  useEffect(() => {
-    if (licencaAtiva && cnpj && abaAtiva === "estoque") {
-      buscarProdutos();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [licencaAtiva, cnpj, abaAtiva]);
-
-  const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
-  };
-
-  // Cadastrar produto
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!formData.nome || !formData.precoVenda) {
-      alert("Nome e Preço de Venda são obrigatórios.");
-      return;
-    }
-
-    setLoading(true);
+    const cnpjLimpo = cnpj.replace(/\D/g, "");
+    const ref = doc(db, "contadores", cnpjLimpo);
 
     try {
-      const codigoGerado = await gerarCodigoProduto();
+      const codigo = await runTransaction(db, async (transaction) => {
+        const docSnap = await transaction.get(ref);
+        let proximo;
 
-      await addDoc(collection(db, "produtos"), {
-        ...formData,
-        licencaCnpj: cnpj,
-        codigo: codigoGerado,
-        estoqueAtual: Number(formData.estoqueAtual) || 0,
-        estoqueMinimo: Number(formData.estoqueMinimo) || 5,
-        precoCusto: Number(formData.precoCusto) || 0,
-        precoVenda: Number(formData.precoVenda) || 0,
-        dataCriacao: serverTimestamp(),
+        if (!docSnap.exists()) {
+          transaction.set(ref, { proximoCodigoProduto: 2 });
+          proximo = 1;
+        } else {
+          const atual = docSnap.data().proximoCodigoProduto || 1;
+          proximo = atual;
+          transaction.update(ref, { proximoCodigoProduto: atual + 1 });
+        }
+
+        return String(proximo).padStart(6, "0");
       });
 
-      alert("Produto cadastrado com sucesso!");
-
-      setFormData({
-        nome: "",
-        cor: "",
-        tamanho: "",
-        precoCusto: "",
-        precoVenda: "",
-        estoqueAtual: "",
-        estoqueMinimo: "",
-        descricao: "",
-        codigoBarras: "",
-        codigo: "",
-      });
-
-      if (abaAtiva === "estoque") buscarProdutos();
+      return codigo;
     } catch (err) {
-      console.error(err);
-      alert("Erro ao cadastrar produto: " + (err.message || err));
+      console.error("Erro ao gerar código:", err);
+      return "000001";
     }
-
-    setLoading(false);
   };
 
-  // Buscar produtos
-  const buscarProdutos = async () => {
+  // ===== BUSCAR PRODUTOS =====
+  const buscarProdutos = useCallback(async () => {
     if (!cnpj) return;
-
-    setCarregandoProdutos(true);
-
     try {
       const q = query(
         collection(db, "produtos"),
         where("licencaCnpj", "==", cnpj),
         orderBy("nome", "asc")
       );
-
       const snap = await getDocs(q);
-      setProdutos(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      const lista = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setProdutos(lista);
     } catch (err) {
       console.error(err);
-    } finally {
-      setCarregandoProdutos(false);
     }
+  }, [cnpj]);
+
+  // ===== useEffect =====
+  useEffect(() => {
+    if (licencaAtiva && cnpj && abaAtiva === "lista") buscarProdutos();
+  }, [licencaAtiva, cnpj, abaAtiva, buscarProdutos]);
+
+  // ===== HANDLERS =====
+  const handleChange = (e) =>
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+
+  // ===== SUBMIT CADASTRO =====
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!formData.nome) return alert("Nome é obrigatório.");
+
+    setLoading(true);
+    try {
+      const codigo = await gerarCodigoProduto();
+      const dados = {
+        ...formData,
+        licencaCnpj: cnpj,
+        codigo,
+        dataCriacao: serverTimestamp(),
+      };
+      await addDoc(collection(db, "produtos"), dados);
+      alert("Produto cadastrado com sucesso!");
+      setFormData({
+        nome: "",
+        codigo: "",
+        tamanho: "",
+        quantidadeInicial: "",
+        estoqueMinimo: "",
+        precoCompra: "",
+        precoVenda: "",
+        observacao: "",
+      });
+      if (abaAtiva === "lista") buscarProdutos();
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao cadastrar produto: " + (err.message || err));
+    }
+    setLoading(false);
   };
 
-  // Deletar
+  // ===== EXCLUIR PRODUTO =====
   const excluirProduto = async (id, nome) => {
-    if (!window.confirm(`Excluir produto "${nome}"?`)) return;
-
+    if (!window.confirm(`Tem certeza que deseja excluir "${nome}"?`)) return;
     try {
       await deleteDoc(doc(db, "produtos", id));
+      alert("Produto excluído!");
       buscarProdutos();
-    } catch (e) {
-      alert("Erro ao excluir: " + e.message);
+    } catch (err) {
+      alert("Erro ao excluir: " + (err.message || err));
     }
   };
 
-  // Abrir modal de edição
+  // ===== ABRIR EDIÇÃO =====
   const abrirEditar = (produto) => {
     setEditingProduct(produto);
-    setEditForm(produto);
+    setEditForm({ ...produto });
     setShowEditModal(true);
   };
 
-  // Salvar edição
+  // ===== SALVAR EDIÇÃO =====
   const salvarEdicao = async () => {
     if (!editingProduct) return;
-
     try {
-      await updateDoc(doc(db, "produtos", editingProduct.id), {
-        ...editForm,
-        precoCusto: Number(editForm.precoCusto) || 0,
-        precoVenda: Number(editForm.precoVenda) || 0,
-        estoqueAtual: Number(editForm.estoqueAtual) || 0,
-        estoqueMinimo: Number(editForm.estoqueMinimo) || 0,
-      });
-
+      await updateDoc(doc(db, "produtos", editingProduct.id), { ...editForm });
       alert("Produto atualizado!");
       setShowEditModal(false);
       buscarProdutos();
     } catch (err) {
+      console.error(err);
       alert("Erro ao salvar: " + (err.message || err));
     }
   };
 
   const produtosFiltrados = produtos.filter((p) => {
-    const termo = termoPesquisa.toLowerCase();
-    const matchTexto =
+    const termo = (termoPesquisa || "").toLowerCase();
+    return (
       (p.nome || "").toLowerCase().includes(termo) ||
-      ((p.codigo || "").toString().toLowerCase() || "").includes(termo);
-
-    let matchEstoque = true;
-    if (filtroEstoque === "baixo")
-      matchEstoque = p.estoqueAtual <= (p.estoqueMinimo || 5);
-    if (filtroEstoque === "zerado") matchEstoque = p.estoqueAtual === 0;
-
-    return matchTexto && matchEstoque;
+      ((p.codigo || "") + "").toLowerCase().includes(termo)
+    );
   });
 
   if (!licencaAtiva)
     return <div style={{ padding: 20 }}>Carregando licença...</div>;
 
+  // ===== RENDER =====
   return (
     <div style={containerStyle}>
       <h2 style={{ textAlign: "center", marginBottom: 20, color: "#333" }}>
         📦 Produtos
       </h2>
 
-      {/* --- Abas --- */}
+      {/* ABAS */}
       <div
         style={{
           display: "flex",
@@ -305,26 +271,26 @@ export default function Produtos() {
         </button>
 
         <button
-          onClick={() => setAbaAtiva("estoque")}
+          onClick={() => setAbaAtiva("lista")}
           style={{
             padding: "10px 20px",
             borderRadius: 10,
             border: "none",
-            background: abaAtiva === "estoque" ? "#6a5acd" : "#d3d6ea",
-            color: abaAtiva === "estoque" ? "#fff" : "#333",
+            background: abaAtiva === "lista" ? "#6a5acd" : "#d3d6ea",
+            color: abaAtiva === "lista" ? "#fff" : "#333",
             cursor: "pointer",
           }}
         >
-          📋 Estoque
+          📋 Lista de Produtos
         </button>
       </div>
 
-      {/* --- Cadastro --- */}
+      {/* FORMULÁRIO */}
       {abaAtiva === "cadastro" && (
         <form
           onSubmit={handleSubmit}
           style={{
-            maxWidth: 600,
+            maxWidth: 700,
             margin: "0 auto",
             display: "flex",
             flexDirection: "column",
@@ -333,54 +299,26 @@ export default function Produtos() {
         >
           <input
             name="nome"
-            placeholder="Nome do Produto *"
+            placeholder="Nome *"
             value={formData.nome}
+            onChange={handleChange}
+            style={inputStyle}
+          />
+
+          <input
+            name="tamanho"
+            placeholder="Tamanho"
+            value={formData.tamanho}
             onChange={handleChange}
             style={inputStyle}
           />
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <input
-              name="cor"
-              placeholder="Cor"
-              value={formData.cor}
-              onChange={handleChange}
-              style={inputStyle}
-            />
-            <input
-              name="tamanho"
-              placeholder="Tamanho"
-              value={formData.tamanho}
-              onChange={handleChange}
-              style={inputStyle}
-            />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <input
               type="number"
-              name="precoCusto"
-              placeholder="Preço Custo"
-              value={formData.precoCusto}
-              onChange={handleChange}
-              style={inputStyle}
-            />
-            <input
-              type="number"
-              name="precoVenda"
-              placeholder="Preço Venda *"
-              value={formData.precoVenda}
-              onChange={handleChange}
-              style={inputStyle}
-            />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <input
-              type="number"
-              name="estoqueAtual"
-              placeholder="Estoque Inicial"
-              value={formData.estoqueAtual}
+              name="quantidadeInicial"
+              placeholder="Quantidade Inicial"
+              value={formData.quantidadeInicial}
               onChange={handleChange}
               style={inputStyle}
             />
@@ -394,22 +332,36 @@ export default function Produtos() {
             />
           </div>
 
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <input
+              type="number"
+              step="0.01"
+              name="precoCompra"
+              placeholder="Preço de Compra"
+              value={formData.precoCompra}
+              onChange={handleChange}
+              style={inputStyle}
+            />
+            <input
+              type="number"
+              step="0.01"
+              name="precoVenda"
+              placeholder="Preço de Venda"
+              value={formData.precoVenda}
+              onChange={handleChange}
+              style={inputStyle}
+            />
+          </div>
+
           <input
-            name="codigoBarras"
-            placeholder="Código de Barras (opcional)"
-            value={formData.codigoBarras}
+            name="observacao"
+            placeholder="Observação (opcional)"
+            value={formData.observacao}
             onChange={handleChange}
             style={inputStyle}
           />
 
-          <textarea
-            name="descricao"
-            placeholder="Descrição (opcional)"
-            value={formData.descricao}
-            onChange={handleChange}
-            style={{ ...inputStyle, minHeight: 80 }}
-          />
-
+          {/* CÓDIGO AUTOMÁTICO */}
           <input
             disabled
             value={formData.codigo || "Gerado automaticamente"}
@@ -439,145 +391,94 @@ export default function Produtos() {
         </form>
       )}
 
-      {/* --- Estoque --- */}
-      {abaAtiva === "estoque" && (
+      {/* LISTA */}
+      {abaAtiva === "lista" && (
         <div>
-          <div
-            style={{
-              display: "flex",
-              gap: 10,
-              marginBottom: 20,
-              flexWrap: "wrap",
-            }}
-          >
-            <input
-              placeholder="Pesquisar..."
-              value={termoPesquisa}
-              onChange={(e) => setTermoPesquisa(e.target.value)}
-              style={{ ...inputStyle, flex: 1 }}
-            />
+          <input
+            placeholder="Pesquisar produto..."
+            value={termoPesquisa}
+            onChange={(e) => setTermePesquisa(e.target.value)}
+            style={{ ...inputStyle, marginBottom: 20 }}
+          />
 
-            <select
-              value={filtroEstoque}
-              onChange={(e) => setFiltroEstoque(e.target.value)}
-              style={{
-                ...inputStyle,
-                width: "200px",
-                cursor: "pointer",
-              }}
-            >
-              <option value="todos">Todos</option>
-              <option value="baixo">Estoque Bajo</option>
-              <option value="zerado">Sem Estoque</option>
-            </select>
-
-            <button
-              onClick={() => {
-                const dados = produtosFiltrados.map((p) => ({
-                  NOME: p.nome,
-                  ESTOQUE: p.estoqueAtual,
-                  PRECO_VENDA: p.precoVenda,
-                  CODIGO: p.codigo || "-",
-                }));
-                exportToCSV(dados, "produtos.csv");
-              }}
-              style={{
-                background: "#6a5acd",
-                border: "none",
-                padding: "10px 20px",
-                color: "#fff",
-                borderRadius: 10,
-                cursor: "pointer",
-              }}
-            >
-              Exportar
-            </button>
-          </div>
-
-          {carregandoProdutos ? (
-            <p>Carregando...</p>
-          ) : (
-            <div style={{ display: "grid", gap: 12 }}>
-              {produtosFiltrados.map((p) => (
+          <div style={{ display: "grid", gap: 12 }}>
+            {produtosFiltrados.map((p) => (
+              <div
+                key={p.id}
+                style={{
+                  background: "#fff",
+                  padding: 18,
+                  borderRadius: 14,
+                  boxShadow: "0 3px 8px rgba(0,0,0,0.08)",
+                  borderLeft: "6px solid #6a5acd",
+                }}
+              >
                 <div
-                  key={p.id}
                   style={{
-                    background: "#fff",
-                    padding: 18,
-                    borderRadius: 14,
-                    boxShadow: "0 3px 8px rgba(0,0,0,0.08)",
-                    borderLeft:
-                      p.estoqueAtual <= p.estoqueMinimo
-                        ? "6px solid #ff9800"
-                        : "6px solid #6a5acd",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 12,
                   }}
                 >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <div>
-                      <div
-                        style={{
-                          fontWeight: "600",
-                          fontSize: 18,
-                          color: "#333",
-                        }}
-                      >
-                        {p.nome}
-                      </div>
-
-                      <div style={{ color: "#666", marginTop: 4 }}>
-                        Código: <strong>{p.codigo}</strong>
-                      </div>
-
-                      <div style={{ color: "#666", marginTop: 4 }}>
-                        Estoque: {p.estoqueAtual}
-                      </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: "600", fontSize: 18, color: "#333" }}>
+                      {p.nome} {p.tamanho && `(${p.tamanho})`}
                     </div>
 
-                    <div style={{ display: "flex", gap: 8 }}>
-                      {/* BOTÃO EDITAR */}
-                      <button
-                        onClick={() => abrirEditar(p)}
-                        style={{
-                          padding: "8px 12px",
-                          background: "#4da3ff",
-                          color: "#fff",
-                          borderRadius: 8,
-                          border: "none",
-                          cursor: "pointer",
-                        }}
-                      >
-                        ✏ Editar
-                      </button>
-
-                      <button
-                        onClick={() => excluirProduto(p.id, p.nome)}
-                        style={{
-                          padding: "8px 12px",
-                          background: "#ff4d4d",
-                          color: "#fff",
-                          borderRadius: 8,
-                          border: "none",
-                          cursor: "pointer",
-                        }}
-                      >
-                        🗑 Excluir
-                      </button>
+                    <div style={{ color: "#666", marginTop: 6 }}>
+                      Código: <strong>{p.codigo}</strong>
                     </div>
+
+                    <div style={{ color: "#666", marginTop: 6 }}>
+                      Estoque: {p.quantidadeInicial || "0"} • Mínimo:{" "}
+                      {p.estoqueMinimo || "0"} • Preço: {p.precoVenda || ""}
+                    </div>
+
+                    {p.observacao && (
+                      <div style={{ color: "#555", marginTop: 6 }}>
+                        Obs: {p.observacao}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => abrirEditar(p)}
+                      style={{
+                        padding: "8px 12px",
+                        background: "#4da3ff",
+                        color: "#fff",
+                        borderRadius: 8,
+                        border: "none",
+                        cursor: "pointer",
+                      }}
+                    >
+                      ✏ Editar
+                    </button>
+
+                    <button
+                      onClick={() => excluirProduto(p.id, p.nome)}
+                      style={{
+                        padding: "8px 12px",
+                        background: "#ff4d4d",
+                        color: "#fff",
+                        borderRadius: 8,
+                        border: "none",
+                        cursor: "pointer",
+                      }}
+                    >
+                      🗑 Excluir
+                    </button>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* MODAL DE EDIÇÃO */}
+      {/* MODAL EDIÇÃO */}
       {showEditModal && (
         <Modal onClose={() => setShowEditModal(false)}>
           <h3 style={{ marginBottom: 20 }}>Editar Produto</h3>
@@ -593,15 +494,6 @@ export default function Produtos() {
             />
 
             <input
-              value={editForm.cor || ""}
-              onChange={(e) =>
-                setEditForm({ ...editForm, cor: e.target.value })
-              }
-              placeholder="Cor"
-              style={inputStyle}
-            />
-
-            <input
               value={editForm.tamanho || ""}
               onChange={(e) =>
                 setEditForm({ ...editForm, tamanho: e.target.value })
@@ -610,78 +502,83 @@ export default function Produtos() {
               style={inputStyle}
             />
 
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <input
+                type="number"
+                value={editForm.quantidadeInicial || ""}
+                onChange={(e) =>
+                  setEditForm({
+                    ...editForm,
+                    quantidadeInicial: e.target.value,
+                  })
+                }
+                placeholder="Quantidade Inicial"
+                style={inputStyle}
+              />
+              <input
+                type="number"
+                value={editForm.estoqueMinimo || ""}
+                onChange={(e) =>
+                  setEditForm({
+                    ...editForm,
+                    estoqueMinimo: e.target.value,
+                  })
+                }
+                placeholder="Estoque Mínimo"
+                style={inputStyle}
+              />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <input
+                type="number"
+                step="0.01"
+                value={editForm.precoCompra || ""}
+                onChange={(e) =>
+                  setEditForm({
+                    ...editForm,
+                    precoCompra: e.target.value,
+                  })
+                }
+                placeholder="Preço de Compra"
+                style={inputStyle}
+              />
+              <input
+                type="number"
+                step="0.01"
+                value={editForm.precoVenda || ""}
+                onChange={(e) =>
+                  setEditForm({
+                    ...editForm,
+                    precoVenda: e.target.value,
+                  })
+                }
+                placeholder="Preço de Venda"
+                style={inputStyle}
+              />
+            </div>
+
             <input
-              type="number"
-              value={editForm.precoCusto || ""}
+              value={editForm.observacao || ""}
               onChange={(e) =>
-                setEditForm({ ...editForm, precoCusto: e.target.value })
+                setEditForm({
+                  ...editForm,
+                  observacao: e.target.value,
+                })
               }
-              placeholder="Preço de Custo"
+              placeholder="Observação"
               style={inputStyle}
             />
 
-            <input
-              type="number"
-              value={editForm.precoVenda || ""}
-              onChange={(e) =>
-                setEditForm({ ...editForm, precoVenda: e.target.value })
-              }
-              placeholder="Preço de Venda"
-              style={inputStyle}
-            />
-
-            <input
-              type="number"
-              value={editForm.estoqueAtual || ""}
-              onChange={(e) =>
-                setEditForm({ ...editForm, estoqueAtual: e.target.value })
-              }
-              placeholder="Estoque Atual"
-              style={inputStyle}
-            />
-
-            <input
-              type="number"
-              value={editForm.estoqueMinimo || ""}
-              onChange={(e) =>
-                setEditForm({ ...editForm, estoqueMinimo: e.target.value })
-              }
-              placeholder="Estoque Mínimo"
-              style={inputStyle}
-            />
-
-            <textarea
-              value={editForm.descricao || ""}
-              onChange={(e) =>
-                setEditForm({ ...editForm, descricao: e.target.value })
-              }
-              placeholder="Descrição"
-              style={{ ...inputStyle, minHeight: 80 }}
-            />
-
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button
-                onClick={() => setShowEditModal(false)}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: "#6c757d",
-                  color: "#fff",
-                  cursor: "pointer",
-                }}
-              >
-                Cancelar
-              </button>
-
+            <div style={{ textAlign: "right", marginTop: 10 }}>
               <button
                 onClick={salvarEdicao}
                 style={{
-                  padding: "10px 14px",
+                  padding: "12px 18px",
                   borderRadius: 8,
-                  border: "none",
-                  background: "#4da3ff",
+                  background: "#6a5acd",
                   color: "#fff",
+                  border: "none",
                   cursor: "pointer",
                 }}
               >

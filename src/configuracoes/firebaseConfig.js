@@ -15,15 +15,21 @@ const firebaseConfig = {
   measurementId: "G-W69D85PBJS"
 };
 
+// 🔹 Inicializa o app Firebase
 const app = initializeApp(firebaseConfig);
 
-// 🔥 Firestore com long polling (ideal para Vite/React local)
-const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true,
-  useFetchStreams: false
-});
+// 🔹 Firestore
+// Use getFirestore para produção, initializeFirestore com long polling para desenvolvimento local
+const db =
+  process.env.NODE_ENV === "development"
+    ? initializeFirestore(app, {
+        experimentalForceLongPolling: true,
+        useFetchStreams: false
+      })
+    : getFirestore(app);
 
-// 🔑 Firebase Authentication
+// 🔹 Firebase Authentication
 const auth = getAuth(app);
 
-export { db, auth };
+// 🔹 Exporta tudo
+export { app, db, auth };
